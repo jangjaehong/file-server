@@ -13,14 +13,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jangjaehong/file-server/pkg/publish"
 	"github.com/jangjaehong/file-server/pkg/updater"
 )
 
@@ -189,134 +188,65 @@ func cmdDownload(ctx context.Context, args []string) error {
 
 // ---------------------------------------------------------------- publish
 
-type api struct {
-	base, token string
-}
-
-func (a *api) do(ctx context.Context, method, path string, body io.Reader, ctype string, out any) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, method, a.base+path, body)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
-	if ctype != "" {
-		req.Header.Set("Content-Type", ctype)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(b, &e)
-		return resp.StatusCode, fmt.Errorf("%s %s: %s %s", method, path, resp.Status, e.Error)
-	}
-	if out != nil {
-		return resp.StatusCode, json.Unmarshal(b, out)
-	}
-	return resp.StatusCode, nil
-}
-
-func (a *api) json(ctx context.Context, method, path string, in, out any) (int, error) {
-	b, _ := json.Marshal(in)
-	return a.do(ctx, method, path, bytes.NewReader(b), "application/json", out)
-}
-
 func cmdPublish(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("publish", flag.ExitOnError)
-	server := fs.String("server", os.Getenv("FS_SERVER"), "server base URL")
-	token := fs.String("token", os.Getenv("FS_TOKEN"), "API token (create one in the admin page)")
-	program := fs.String("program", "", "program slug")
-	name := fs.String("name", "", "program display name (creates the program if it does not exist)")
-	version := fs.String("version", "", "semantic version, e.g. 1.2.3 or 1.3.0-beta.1")
+	server := fs.String("server", os.Getenv("FS_SERVER"), "server base URL (env FS_SERVER)")
+	token := fs.String("token", os.Getenv("FS_TOKEN"), "API token (env FS_TOKEN)")
+	program := fs.String("program", "", "program slug, e.g. onetaskbar")
+	name := fs.String("name", "", "display name when the program is created (default: slug)")
+	version := fs.String("version", "", "version, e.g. 1.0.0.57 (default: version.txt next to the first -file)")
 	channel := fs.String("channel", "stable", "stable or beta")
 	notes := fs.String("notes", "", "patch notes (Markdown)")
 	notesFile := fs.String("notes-file", "", "read patch notes from file")
+	notesGit := fs.String("notes-from-git", "", "generate notes from commit subjects: <ref> (= <ref>..HEAD) or <a>..<b>")
 	mandatory := fs.Bool("mandatory", false, "clients must install this update")
 	draft := fs.Bool("draft", false, "upload only, do not publish")
-	var files multiFlag
+	skip := fs.Bool("skip-if-unconfigured", false, "exit 0 without doing anything when server or token is empty (CI without secrets)")
+	var files, fixed multiFlag
 	fs.Var(&files, "file", "platform=path, repeatable (e.g. -file windows-amd64=dist/app.exe)")
+	fs.Var(&fixed, "fixed", "unversioned file such as defaults.json, repeatable (replaced on every upload)")
 	_ = fs.Parse(args)
 
-	if *server == "" || *token == "" || *program == "" || *version == "" || len(files) == 0 {
-		return errors.New("-server, -token, -program, -version and at least one -file are required")
+	if *skip && (*server == "" || *token == "") {
+		fmt.Println("FS_SERVER/FS_TOKEN not set; skipping publish")
+		return nil
 	}
-	if *notesFile != "" {
-		b, err := os.ReadFile(*notesFile)
-		if err != nil {
-			return err
-		}
-		*notes = string(b)
+	o := publish.Options{
+		Server: *server, Token: *token, Program: *program, Name: *name, Version: *version,
+		Channel: *channel, Notes: *notes, Mandatory: *mandatory, Draft: *draft,
+		Files: map[string]string{}, Fixed: fixed,
+		Log: func(f string, a ...any) { fmt.Printf(f+"\n", a...) },
 	}
-	a := &api{base: strings.TrimRight(*server, "/"), token: *token}
-	slug := url.PathEscape(*program)
-
-	if *name != "" {
-		code, err := a.json(ctx, "POST", "/api/v1/admin/programs", map[string]string{"slug": *program, "name": *name}, nil)
-		if err != nil && code != http.StatusConflict {
-			return err
-		}
-	}
-	code, err := a.json(ctx, "POST", "/api/v1/admin/programs/"+slug+"/releases",
-		map[string]any{"version": *version, "channel": *channel, "notes": *notes, "mandatory": *mandatory}, nil)
-	if err != nil {
-		if code != http.StatusConflict {
-			return err
-		}
-		fmt.Println("release already exists; continuing (works only while it is a draft)")
-	} else {
-		fmt.Println("created draft", *program, *version)
-	}
-	rpath := "/api/v1/admin/programs/" + slug + "/releases/" + url.PathEscape(*version)
-
 	for _, spec := range files {
 		platform, path, ok := strings.Cut(spec, "=")
 		if !ok {
 			return fmt.Errorf("-file %q: expected platform=path", spec)
 		}
-		if err := uploadFile(ctx, a, rpath+"/assets", platform, path); err != nil {
+		o.Files[platform] = path
+		if o.Version == "" {
+			o.Version = publish.VersionFromFile(path)
+		}
+	}
+	switch {
+	case *notesFile != "":
+		b, err := os.ReadFile(*notesFile)
+		if err != nil {
 			return err
 		}
-		fmt.Printf("uploaded %s (%s)\n", path, platform)
+		o.Notes = string(b)
+	case *notesGit != "" && o.Notes == "":
+		n, err := publish.NotesFromGit(".", *notesGit)
+		if err != nil {
+			return err
+		}
+		o.Notes = n
 	}
-	if *draft {
-		fmt.Println("left as draft; publish it from the admin page")
-		return nil
-	}
-	if _, err := a.do(ctx, "POST", rpath+"/publish", nil, "", nil); err != nil {
-		return err
-	}
-	fmt.Printf("published %s %s\n", *program, *version)
-	return nil
-}
-
-// uploadFile streams a file as multipart without loading it into memory.
-func uploadFile(ctx context.Context, a *api, path, platform, file string) error {
-	f, err := os.Open(file)
+	res, err := publish.Run(ctx, o)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
-	go func() {
-		err := mw.WriteField("platform", platform)
-		if err == nil {
-			var part io.Writer
-			part, err = mw.CreateFormFile("file", filepath.Base(file))
-			if err == nil {
-				_, err = io.Copy(part, f)
-			}
-		}
-		if err == nil {
-			err = mw.Close()
-		}
-		pw.CloseWithError(err)
-	}()
-	_, err = a.do(ctx, "POST", path, pr, mw.FormDataContentType(), nil)
-	return err
+	if len(o.Files) > 0 {
+		fmt.Println("latest.json:", res.LatestJSON)
+	}
+	return nil
 }

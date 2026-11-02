@@ -66,38 +66,104 @@ Windows Server에서 Docker 없이 실행하려면 `make release`로 만든 `bin
    (slug는 업데이트 주소의 폴더 이름과 **정확히 같아야** 합니다)
 2. **API 토큰** 생성 (빌드 PC에서 업로드할 때 사용)
 
-## 4. 배포 (빌드 PC, PowerShell)
+## 4. 배포 도구 — `tools/Publish-FileServer.ps1` / `fsctl publish`
 
-`tools/Publish-FileServer.ps1`은 기존 `Publish-Internal.ps1`(IIS 폴더 복사)을 대체합니다.
-버전은 지정하지 않으면 exe 옆의 `version.txt`(ICS-SCM) 또는 exe의 파일 버전(One TaskBar)에서 읽습니다.
+두 도구는 같은 동작을 합니다. 이 저장소의 `tools/Publish-FileServer.ps1`이 원본이며,
+`ics-scm`, `OneTaskBarAtWindows` 저장소는 이 파일을 `tools/`에 복사해 씁니다.
+
+**동작 (여러 번 실행해도 안전)**
+1. 프로그램이 없으면 **자동 생성** (최초 배포). 이름은 `-Name`, 없으면 slug.
+2. 버전이 없으면 생성 → 파일 업로드 → 배포.
+3. 같은 버전이 **초안**이면 이어서 진행 (같은 플랫폼의 다른 파일은 교체).
+4. 같은 버전이 이미 **배포됨**: SHA-256이 같으면 "이미 배포됨"으로 **성공(exit 0)**, 다르면 **오류(exit 1)**.
+   배포된 버전은 바꿀 수 없으니 버전 번호를 올려 다시 빌드하세요.
+5. 회수된 버전이면 오류.
+
+**버전 결정 순서:** `-Version` → 파일 옆 `version.txt` → exe의 파일 버전(Windows에서만)
+
+| PowerShell | fsctl | 설명 |
+|---|---|---|
+| `-Server` | `-server` | 기본값 `$env:FS_SERVER` |
+| `-Token` | `-token` | 기본값 `$env:FS_TOKEN` |
+| `-Program` (필수) | `-program` | slug: `onetaskbar`, `ics-scm` |
+| `-Name` | `-name` | 최초 생성 시 표시 이름 (기본: slug) |
+| `-File` + `-Platform` (기본 `windows-amd64`) | `-file windows-amd64=경로` | 배포할 exe |
+| `-Version` | `-version` | 예: `1.0.0.57` |
+| `-Channel stable\|beta` | `-channel` | 기본 stable |
+| `-Notes` / `-NotesFile` | `-notes` / `-notes-file` | 패치노트 (Markdown) |
+| `-NotesFromGit <ref>` 또는 `<a>..<b>` | `-notes-from-git` | 커밋 제목으로 패치노트 생성. `-Notes`/`-NotesFile`이 있으면 무시 |
+| `-Mandatory` | `-mandatory` | 필수 업데이트 |
+| `-Draft` | `-draft` | 업로드만, 배포는 관리자 화면에서 |
+| `-FixedFile defaults.json` | `-fixed defaults.json` | 버전과 무관한 고정 파일 (교체) |
+| `-SkipIfUnconfigured` | `-skip-if-unconfigured` | 서버/토큰이 비어 있으면 아무것도 안 하고 성공 (시크릿 없는 CI) |
+
+PowerShell 스크립트는 GitHub Actions에서 쓸 수 있도록 `$GITHUB_OUTPUT`에
+`version`, `status`(`published` / `already-published` / `draft`), `latest_json`을 기록합니다.
 
 ```powershell
-$env:FS_TOKEN = 'fst_...'   # 관리자 페이지 → API 토큰
-
-# One TaskBar: 설치 파일 배포
-.\Publish-FileServer.ps1 -Server http://211.231.121.41:9100 -Program onetaskbar -Name "One TaskBar" `
-    -File ..\OneTaskBarAtWindows\release\OneTaskBar-Setup.exe -Notes "알림 배너 개선"
-
-# One TaskBar: 회사 기본 설정(defaults.json) 교체 — Publish-Defaults.ps1 대체
-.\Publish-FileServer.ps1 -Server http://211.231.121.41:9100 -Program onetaskbar -FixedFile .\defaults.json
-
-# ICS-SCM: build.bat 결과물 배포
-.\Publish-FileServer.ps1 -Server http://211.231.121.41:9100 -Program ics-scm -Name "ICS-SCM" `
-    -File ..\ics-scm\dist\ics-scm.exe -NotesFile .\notes.md
+# 빌드 PC에서 수동 배포
+$env:FS_SERVER='http://211.231.121.41:9100'; $env:FS_TOKEN='fst_...'
+.\tools\Publish-FileServer.ps1 -Program onetaskbar -Name "One TaskBar" -File release\OneTaskBar-Setup.exe -Notes "알림 개선"
+.\tools\Publish-FileServer.ps1 -Program ics-scm -Name "ICS-SCM" -File dist\ics-scm.exe -NotesFromGit v1.0.0
+.\tools\Publish-FileServer.ps1 -Program onetaskbar -FixedFile .\defaults.json
 ```
 
-| 옵션 | 설명 |
-|---|---|
-| `-Draft` | 업로드만 하고, 관리자 화면에서 검토 후 [배포] |
-| `-Mandatory` | 필수 업데이트로 표시 (`latest.json`의 `mandatory`, `/api/v1/update`의 `mandatory`) |
-| `-Channel beta` | 베타 채널 (`?channel=beta` 주소를 쓰는 PC만 받음) |
-| `-Version 1.0.0.60` | 버전을 직접 지정 |
+## 5. CI 자동 배포 (빌드 → 파일서버 → 자동 업데이트)
 
-같은 버전 번호는 다시 올릴 수 없습니다. 고쳐서 다시 내보내려면 빌드 번호를 올려서 빌드하세요
-(CI 실행 번호가 끝자리에 붙으므로 보통 자동으로 올라갑니다).
-
-Linux/macOS 빌드 머신이나 CI에서는 같은 일을 `fsctl publish`로 할 수 있습니다.
-```bash
-fsctl publish -server http://211.231.121.41:9100 -token $FS_TOKEN -program ics-scm \
-  -version 1.0.0.58 -notes "…" -file windows-amd64=dist/ics-scm.exe
 ```
+개발자 push (main)
+  └─ GitHub Actions: 빌드 (버전 = X.Y.Z.<커밋 수>)
+       └─ Publish-FileServer.ps1 / fsctl publish   ← FS_SERVER, FS_TOKEN 시크릿
+            ├─ (최초 1회) 프로그램 자동 생성
+            └─ 새 버전 생성 → exe 업로드 → 배포
+                 └─ /<slug>/latest.json 갱신
+                      └─ 각 PC: 업데이트 확인 → 다운로드 → SHA-256 검증 → 설치
+```
+
+### 5-1. 준비 (한 번)
+1. 파일서버 관리자 페이지 → **API 토큰** → 이름 `github-ci` 등으로 생성, 표시된 값을 복사합니다 (한 번만 표시).
+2. 각 저장소(ics-scm, OneTaskBarAtWindows) → GitHub **Settings → Secrets and variables → Actions**:
+   - `FS_SERVER` = `http://211.231.121.41:9100`
+   - `FS_TOKEN` = 위에서 복사한 토큰
+3. 시크릿이 없으면 배포 단계는 **건너뛰고** 빌드는 성공합니다 (`-SkipIfUnconfigured`). 포크나 시크릿 설정 전에도 CI가 깨지지 않습니다.
+
+### 5-2. 워크플로 예시 (배포 단계)
+```yaml
+      - name: Publish to file server
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          FS_SERVER: ${{ secrets.FS_SERVER }}
+          FS_TOKEN: ${{ secrets.FS_TOKEN }}
+        run: ./tools/Publish-FileServer.ps1 -Program ics-scm -Name "ICS-SCM" -File dist/ics-scm.exe -SkipIfUnconfigured -NotesFromGit "HEAD~20"
+```
+- `-NotesFromGit`과 커밋 수 기반 버전은 git 기록이 필요하므로 `actions/checkout`에 `fetch-depth: 0`을 지정하세요.
+- 같은 커밋으로 워크플로를 다시 실행해도 같은 버전과 같은 파일이므로 "이미 배포됨"으로 성공합니다.
+- 다시 빌드했는데 결과물이 달라졌다면(재현 불가능한 빌드) 같은 버전에 다른 파일이 되어 실패합니다.
+  이 경우 커밋을 하나 더 쌓아 버전을 올리세요.
+- Linux 러너에서 PowerShell 대신 Go 도구를 쓰려면:
+  `go run github.com/jangjaehong/file-server/cmd/fsctl@latest publish -program ics-scm -file windows-amd64=dist/ics-scm.exe -skip-if-unconfigured`
+
+### 5-3. GitHub 클라우드 러너에서 사내 서버에 접근이 안 될 때
+GitHub 호스티드 러너(`ubuntu-latest`, `windows-2025`)는 인터넷에서 실행되므로 사내 서버(211.231.121.41:9100)에
+연결하지 못할 수 있습니다 (방화벽). 배포 단계에서 연결 시간 초과가 나면 **사내망 Windows PC를 self-hosted runner로** 씁니다.
+
+1. 저장소 → **Settings → Actions → Runners → New self-hosted runner** → Windows 선택, 안내된 명령을 사내 PC에서 실행
+   (서비스로 설치 권장: `config.cmd` 단계에서 "run as service" 선택).
+2. 그 PC에 PowerShell 7(`pwsh`)과 빌드 도구(Go 또는 .NET 빌드 환경)를 설치합니다.
+3. 배포 job만 사내 러너에서 돌립니다. 빌드는 클라우드에서 하고 결과물(artifact)을 넘겨받는 구성이 간단합니다.
+   ```yaml
+     publish:
+       needs: build
+       runs-on: [self-hosted, windows]
+       if: github.ref == 'refs/heads/main'
+       steps:
+         - uses: actions/checkout@v4          # tools/Publish-FileServer.ps1
+         - uses: actions/download-artifact@v4
+           with: { name: ics-scm-windows, path: dist }
+         - shell: pwsh
+           env: { FS_SERVER: "${{ secrets.FS_SERVER }}", FS_TOKEN: "${{ secrets.FS_TOKEN }}" }
+           run: ./tools/Publish-FileServer.ps1 -Program ics-scm -Name "ICS-SCM" -File dist/ics-scm.exe -SkipIfUnconfigured
+   ```
+4. 사내 러너는 그 PC가 GitHub에 **나가는 연결(HTTPS 443)** 만 있으면 동작합니다. 외부에서 사내로 포트를 열 필요는 없습니다.
+   러너는 해당 저장소에만 등록하고, **공개 저장소에는 쓰지 마세요** (외부 포크의 PR 코드가 사내 PC에서 실행될 수 있음).

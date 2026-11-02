@@ -83,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	admin("DELETE /api/v1/admin/programs/{slug}", s.handleDeleteProgram)
 	admin("GET /api/v1/admin/programs/{slug}/releases", s.handleAdminListReleases)
 	admin("POST /api/v1/admin/programs/{slug}/releases", s.handleCreateRelease)
+	admin("GET /api/v1/admin/programs/{slug}/releases/{version}", s.handleAdminGetRelease)
 	admin("PUT /api/v1/admin/programs/{slug}/releases/{version}", s.handleUpdateRelease)
 	admin("DELETE /api/v1/admin/programs/{slug}/releases/{version}", s.handleDeleteRelease)
 	admin("POST /api/v1/admin/programs/{slug}/releases/{version}/publish", s.handleSetStatus(store.StatusPublished))

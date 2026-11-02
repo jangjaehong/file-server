@@ -142,6 +142,9 @@ data/files/scada-viewer/1.1.0/windows-amd64/ScadaViewer.exe   ← 실제 저장 
    # -mandatory : 필수 업데이트
    # -channel beta : 베타 채널
    ```
+   - 프로그램이 없으면 자동 생성되고, 같은 버전·같은 파일로 다시 실행하면 "이미 배포됨"으로 성공합니다(CI 재실행 안전).
+   - `-notes-from-git v1.3.0` 으로 커밋 제목에서 패치노트를 만들 수 있습니다.
+   - GitHub Actions 연동: [docs/windows-programs.md](docs/windows-programs.md) 5절
    소스의 git 태그(`v1.4.0`)와 버전을 일치시키고, 빌드 시 `-ldflags "-X main.Version=1.4.0"` 로
    프로그램 안에 버전을 박아 두면 업데이트 확인에 그대로 사용할 수 있습니다.
 
@@ -254,6 +257,7 @@ internal/server HTTP 핸들러, 인증, 업로드/다운로드, 업데이트 API
 internal/store  SQLite 저장소 (programs / releases / assets / admins / sessions / api_tokens)
 internal/semver Semantic Versioning 파싱·비교
 pkg/updater     프로그램에 내장하는 자동 업데이트 클라이언트 라이브러리
+pkg/publish     배포 로직 (fsctl publish; Publish-FileServer.ps1과 동일한 규칙)
 tools/Publish-FileServer.ps1  Windows 빌드 PC용 배포 스크립트 (기존 Publish-Internal.ps1 대체)
 docs/windows-programs.md      One TaskBar · ICS-SCM 연동/전환 가이드
 web/static      내장 웹 UI (Vanilla JS, 외부 의존성 없음)

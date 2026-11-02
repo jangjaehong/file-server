@@ -197,6 +197,13 @@ func (s *Server) loadRelease(w http.ResponseWriter, r *http.Request) (*store.Pro
 	return p, rel, true
 }
 
+// handleAdminGetRelease returns a release in any status (used by publish tools to resume or skip).
+func (s *Server) handleAdminGetRelease(w http.ResponseWriter, r *http.Request) {
+	if _, rel, ok := s.loadRelease(w, r); ok {
+		writeJSON(w, http.StatusOK, rel)
+	}
+}
+
 // handleUpdateRelease edits notes/channel/mandatory. The version number and the
 // files of a published release can never change.
 func (s *Server) handleUpdateRelease(w http.ResponseWriter, r *http.Request) {
