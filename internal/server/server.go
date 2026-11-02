@@ -61,6 +61,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/programs/{slug}/releases", s.handleListReleases)
 	mux.HandleFunc("GET /api/v1/programs/{slug}/releases/{version}", s.handleGetRelease)
 	mux.HandleFunc("GET /api/v1/update", s.handleUpdateCheck) // auto-update endpoint
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
 
 	// ---- downloads (no login). "latest" is accepted as version.
 	mux.HandleFunc("GET /download/{slug}/{version}/{platform}", s.handleDownloadByPlatform)

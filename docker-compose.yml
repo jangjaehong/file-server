@@ -1,0 +1,22 @@
+services:
+  file-server:
+    build: .
+    image: file-server:latest
+    container_name: file-server
+    restart: unless-stopped
+    ports:
+      - "${FS_PORT:-8080}:8080"
+    environment:
+      # 최초 실행 시 관리자 계정 (계정이 이미 있으면 무시됨)
+      FS_ADMIN_USER: ${FS_ADMIN_USER:-admin}
+      FS_ADMIN_PASSWORD: ${FS_ADMIN_PASSWORD:?FS_ADMIN_PASSWORD를 .env에 설정하세요}
+      # 업데이트 응답에 들어갈 외부 주소 (예: http://192.168.0.10:8080)
+      FS_BASE_URL: ${FS_BASE_URL:-}
+      # HTTPS 리버스 프록시 뒤라면 1
+      FS_SECURE_COOKIES: ${FS_SECURE_COOKIES:-0}
+    command: ["-max-upload-mb", "${FS_MAX_UPLOAD_MB:-4096}"]
+    volumes:
+      - fs-data:/data   # DB + 업로드 파일 (백업 대상)
+
+volumes:
+  fs-data:

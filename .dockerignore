@@ -1,0 +1,9 @@
+.git
+data
+bin
+*.db
+*.db-wal
+*.db-shm
+Dockerfile
+docker-compose.yml
+.env

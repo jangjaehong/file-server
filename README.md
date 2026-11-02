@@ -3,7 +3,7 @@
 웹에서 프로그램을 **업로드(관리자)** / **다운로드(누구나)** 하고, 각 프로그램이 스스로
 **자동 업데이트** 할 수 있도록 배포하는 서버입니다.
 
-- Go 단일 실행 파일 (CGO 불필요, Windows/Linux 모두 빌드 가능) + 내장 SQLite + 내장 웹 UI
+- Go 1.27 단일 실행 파일 (CGO 불필요, Windows/Linux 모두 빌드 가능) + 내장 SQLite + 내장 웹 UI
 - 인터넷이 없는 폐쇄망(SCADA/공장망 등)에서도 외부 CDN 없이 동작
 - 프로그램별 설명, 버전별 패치노트(Markdown), 플랫폼별 파일, SHA-256 체크섬, 다운로드 수
 - 자동 업데이트 API + Go 클라이언트 라이브러리(`pkg/updater`) + CLI(`fsctl`)
@@ -11,6 +11,29 @@
 ---
 
 ## 1. 빠른 시작
+
+### Docker (권장)
+
+```bash
+cp .env.example .env          # FS_ADMIN_PASSWORD, FS_BASE_URL 수정
+docker compose up -d --build
+# http://서버:8080          공개 다운로드 페이지
+# http://서버:8080/#/admin  관리자
+```
+
+- 이미지: `golang:1.27-alpine` 으로 빌드 → `distroless/static` 위에서 실행 (약 34MB, 셸 없음, non-root uid 65532)
+- 데이터(DB + 업로드 파일)는 볼륨 `fs-data` → 컨테이너 `/data` 에 저장. 이미지를 바꿔도 유지됩니다.
+- `HEALTHCHECK` 내장 (`/healthz`), `restart: unless-stopped`
+- 관리자 비밀번호 변경: `docker compose exec file-server server set-admin -data /data -user admin -password '새비밀번호'`
+- 백업: `docker run --rm -v file-server_fs-data:/data -v $PWD:/backup alpine tar czf /backup/fs-backup.tgz -C /data .`
+  (SQLite WAL 사용 중이므로 일관된 백업을 원하면 잠깐 `docker compose stop` 후 실행)
+- 업데이트: `git pull && docker compose up -d --build`
+- `FS_BASE_URL` 은 클라이언트가 접속하는 주소(예: `http://192.168.0.10:8080`)로 꼭 지정하세요.
+  업데이트 API 응답의 다운로드 URL 이 이 주소로 만들어집니다.
+- 폐쇄망 서버라면 인터넷 되는 PC에서 `docker build -t file-server:1.0 .` →
+  `docker save file-server:1.0 | gzip > file-server.tar.gz` → 반입 후 `docker load < file-server.tar.gz`
+
+### 직접 실행
 
 ```bash
 go build -o bin/ ./cmd/...                    # 또는 make build / make release(크로스 컴파일)
@@ -214,11 +237,12 @@ fsctl download -server http://files.local:8080 -program scada-viewer -o .   # la
 ## 6. 구조
 
 ```
-cmd/server      서버 실행 파일 (+ set-admin)
+cmd/server      서버 실행 파일 (+ set-admin, healthcheck)
 cmd/fsctl       업로드(publish)·업데이트(check/update/download) CLI
 internal/server HTTP 핸들러, 인증, 업로드/다운로드, 업데이트 API
 internal/store  SQLite 저장소 (programs / releases / assets / admins / sessions / api_tokens)
 internal/semver Semantic Versioning 파싱·비교
 pkg/updater     프로그램에 내장하는 자동 업데이트 클라이언트 라이브러리
 web/static      내장 웹 UI (Vanilla JS, 외부 의존성 없음)
+Dockerfile, docker-compose.yml, .env.example   Docker 배포
 ```

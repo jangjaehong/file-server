@@ -2,6 +2,7 @@
 //
 //	server [flags]                         run the server
 //	server set-admin -user NAME -password PW  create admin or reset password
+//	server healthcheck                        exit 0 if the local server answers /healthz
 package main
 
 import (
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +36,10 @@ func env(key, def string) string {
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "set-admin" {
 		setAdmin(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		healthcheck() // used by Docker HEALTHCHECK (the image has no shell/curl)
 		return
 	}
 
@@ -139,4 +145,21 @@ func setAdmin(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("admin %q saved\n", *user)
+}
+
+func healthcheck() {
+	port := env("FS_ADDR", ":8080")
+	if i := strings.LastIndex(port, ":"); i >= 0 {
+		port = port[i+1:]
+	}
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get("http://127.0.0.1:" + port + "/healthz")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		os.Exit(1)
+	}
 }
