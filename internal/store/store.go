@@ -192,10 +192,16 @@ func (s *Store) CountAdmins(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// MinPasswordLen is the minimum admin password length.
+const MinPasswordLen = 4
+
 // UpsertAdmin creates the admin or resets its password.
 func (s *Store) UpsertAdmin(ctx context.Context, username, password string) error {
-	if username == "" || len(password) < 8 {
-		return errors.New("username required and password must be at least 8 characters")
+	if strings.TrimSpace(username) == "" {
+		return errors.New("username required")
+	}
+	if len(password) < MinPasswordLen {
+		return fmt.Errorf("password must be at least %d characters", MinPasswordLen)
 	}
 	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {

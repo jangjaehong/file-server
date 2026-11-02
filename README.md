@@ -24,7 +24,8 @@ docker compose up -d --build
 - 이미지: `golang:1.27-alpine` 으로 빌드 → `distroless/static` 위에서 실행 (약 34MB, 셸 없음, non-root uid 65532)
 - 데이터(DB + 업로드 파일)는 볼륨 `fs-data` → 컨테이너 `/data` 에 저장. 이미지를 바꿔도 유지됩니다.
 - `HEALTHCHECK` 내장 (`/healthz`), `restart: unless-stopped`
-- 관리자 비밀번호 변경: `docker compose exec file-server server set-admin -data /data -user admin -password '새비밀번호'`
+- 관리자 비밀번호 변경: `.env` 의 `FS_ADMIN_PASSWORD` 수정 후 `docker compose up -d` (재시작 시 반영)
+- 로그인이 안 되면 `docker compose logs file-server | grep -i admin` 으로 계정 적용 결과를 확인하세요.
 - 백업: `docker run --rm -v file-server_fs-data:/data -v $PWD:/backup alpine tar czf /backup/fs-backup.tgz -C /data .`
   (SQLite WAL 사용 중이므로 일관된 백업을 원하면 잠깐 `docker compose stop` 후 실행)
 - 업데이트: `git pull && docker compose up -d --build`
@@ -43,8 +44,11 @@ FS_ADMIN_PASSWORD='change-me-please' ./bin/server -addr :8080 -data ./data
 #           http://localhost:8080/#/admin   (관리자: admin / change-me-please)
 ```
 
-처음 실행 시 관리자 계정이 없으면 `FS_ADMIN_USER`(기본 `admin`) / `FS_ADMIN_PASSWORD` 로 생성합니다.
-비밀번호를 지정하지 않으면 랜덤 비밀번호를 생성해 **로그에 한 번만** 출력합니다.
+관리자 계정 규칙:
+- `FS_ADMIN_PASSWORD` 가 설정되어 있으면 **시작할 때마다** `FS_ADMIN_USER`(기본 `admin`) 계정을 그 비밀번호로 맞춥니다.
+  `.env` 를 고치고 재시작하면 바로 반영됩니다. (이 경우 `set-admin` 으로 바꾼 비밀번호는 재시작 시 덮어써집니다.)
+- 설정하지 않았고 계정이 없으면 랜덤 비밀번호를 생성해 **로그에 한 번만** 출력합니다.
+- 비밀번호는 최소 4자입니다. 8자 미만이면 경고 로그를 남깁니다. 잘못된 값이어도 서버는 멈추지 않고 로그에 이유를 남깁니다.
 
 ```bash
 ./bin/server set-admin -data ./data -user admin -password 'new-password'   # 비밀번호 변경/계정 추가

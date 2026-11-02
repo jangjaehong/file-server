@@ -104,10 +104,27 @@ func openStore(dataDir string) *store.Store {
 	return st
 }
 
-// bootstrapAdmin creates the first admin from FS_ADMIN_USER / FS_ADMIN_PASSWORD,
-// or generates a random password and prints it once.
+// bootstrapAdmin prepares the admin account at startup.
+//
+//   - FS_ADMIN_PASSWORD set: the account FS_ADMIN_USER (default "admin") is created
+//     or its password is reset to that value on every start, so editing .env and
+//     restarting always takes effect.
+//   - not set and no admin exists: a random password is generated and logged once.
+//
+// An invalid value never stops the server; the reason is logged instead.
 func bootstrapAdmin(st *store.Store) {
 	ctx := context.Background()
+	user, pw := env("FS_ADMIN_USER", "admin"), os.Getenv("FS_ADMIN_PASSWORD")
+	if pw != "" {
+		if err := st.UpsertAdmin(ctx, user, pw); err != nil {
+			log.Printf("WARNING: FS_ADMIN_PASSWORD not applied to %q: %v", user, err)
+		} else {
+			log.Printf("admin %q password set from FS_ADMIN_PASSWORD", user)
+			if len(pw) < 8 {
+				log.Printf("WARNING: admin password is shorter than 8 characters; use a stronger one in production")
+			}
+		}
+	}
 	n, err := st.CountAdmins(ctx)
 	if err != nil {
 		log.Fatal(err)
@@ -115,28 +132,20 @@ func bootstrapAdmin(st *store.Store) {
 	if n > 0 {
 		return
 	}
-	user, pw := env("FS_ADMIN_USER", "admin"), os.Getenv("FS_ADMIN_PASSWORD")
-	generated := pw == ""
-	if generated {
-		b := make([]byte, 9)
-		_, _ = rand.Read(b)
-		pw = hex.EncodeToString(b)
-	}
-	if err := st.UpsertAdmin(ctx, user, pw); err != nil {
+	b := make([]byte, 9)
+	_, _ = rand.Read(b)
+	gen := hex.EncodeToString(b)
+	if err := st.UpsertAdmin(ctx, user, gen); err != nil {
 		log.Fatal(err)
 	}
-	if generated {
-		log.Printf("==== initial admin created: user=%q password=%q (change it with `server set-admin`) ====", user, pw)
-	} else {
-		log.Printf("initial admin %q created from environment", user)
-	}
+	log.Printf("==== initial admin created: user=%q password=%q (set FS_ADMIN_PASSWORD or use `server set-admin`) ====", user, gen)
 }
 
 func setAdmin(args []string) {
 	fs := flag.NewFlagSet("set-admin", flag.ExitOnError)
 	dataDir := fs.String("data", env("FS_DATA", "./data"), "data directory")
 	user := fs.String("user", "admin", "admin username")
-	pw := fs.String("password", "", "new password (min 8 chars)")
+	pw := fs.String("password", "", "new password (min 4 chars)")
 	_ = fs.Parse(args)
 	st := openStore(*dataDir)
 	defer st.Close()

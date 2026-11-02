@@ -7,7 +7,7 @@ services:
     ports:
       - "${FS_PORT:-8080}:8080"
     environment:
-      # 최초 실행 시 관리자 계정 (계정이 이미 있으면 무시됨)
+      # 관리자 계정: 시작할 때마다 이 비밀번호로 맞춤 (최소 4자)
       FS_ADMIN_USER: ${FS_ADMIN_USER:-admin}
       FS_ADMIN_PASSWORD: ${FS_ADMIN_PASSWORD:?FS_ADMIN_PASSWORD를 .env에 설정하세요}
       # 업데이트 응답에 들어갈 외부 주소 (예: http://192.168.0.10:8080)
