@@ -1,4 +1,4 @@
-# CI smoke test: starts the built server and runs tools/Publish-FileServer.ps1 through
+﻿# CI smoke test: starts the built server and runs tools/Publish-FileServer.ps1 through
 # the scenarios CI relies on (first deployment, re-run, immutability, draft resume, fixed files).
 # Usage (from the repository root, after `go build -o bin/ ./cmd/server`): pwsh ./tools/ci/Test-PublishScript.ps1
 $ErrorActionPreference = 'Stop'
@@ -116,6 +116,19 @@ try {
     Check ($r.Code -eq 0 -and (Get-Json '/ics-scm/latest.json').version -eq '1.0.0.6') '-AllowOlder publishes a maintenance build without changing latest'
     Check ($r.Out -match 'Server: ics-scm stable 1\.0\.0\.6' -and $r.Out -match '"version":"1\.0\.0\.6"') 'server version and latest.json shown'
 
+    # 9b. Korean commit subjects in -NotesFromGit (console encoding is not UTF-8 on Korean Windows / CI).
+    $repo = Join-Path $work 'notes-repo'
+    New-Item -ItemType Directory -Path $repo | Out-Null
+    Push-Location $repo
+    try {
+        & git init -q
+        & git -c user.name=ci -c user.email=ci@example.invalid commit -q --allow-empty -m 'init'
+        & git -c user.name=ci -c user.email=ci@example.invalid commit -q --allow-empty -m '한글 패치노트: 알림 개선'
+        $r = Publish @('-Program', 'ics-scm', '-File', $exe, '-Version', '1.0.0.8', '-NotesFromGit', 'HEAD~1')
+    } finally { Pop-Location }
+    $notes8 = (Get-Json '/api/v1/programs/ics-scm/releases/1.0.0.8').notes
+    Check ($r.Code -eq 0 -and $notes8 -eq '- 한글 패치노트: 알림 개선') "Korean commit subject kept in notes (got: $notes8)"
+
     # 10. Token store: save once, then publish with neither FS_SERVER nor FS_TOKEN set.
     $storePath = if ($IsWindows) { Join-Path $env:APPDATA 'FileServer\credentials.json' } else { Join-Path $HOME '.config/fileserver/credentials.json' }
     $noEnv = @{ FS_SERVER = ''; FS_TOKEN = '' }
@@ -124,9 +137,9 @@ try {
     $stored = Get-Content -LiteralPath $storePath -Raw
     if ($IsWindows) { Check (-not $stored.Contains($token) -and $stored -match '"dpapi"') 'stored token is DPAPI-encrypted' }
     else { Check (((& stat -c '%a' $storePath) -join '') -eq '600') 'store file mode is 600' }
-    Set-Content -LiteralPath $versionTxt -Value '1.0.0.7'
+    Set-Content -LiteralPath $versionTxt -Value '1.0.0.9'
     $r = Publish @('-Program', 'ics-scm', '-File', $exe) $noEnv
-    Check ($r.Code -eq 0 -and $r.Out -match 'Published ics-scm 1\.0\.0\.7') 'saved server + token used when nothing is configured'
+    Check ($r.Code -eq 0 -and $r.Out -match 'Published ics-scm 1\.0\.0\.9') 'saved server + token used when nothing is configured'
     $r = Publish @('-Program', 'ics-scm', '-File', $exe, '-Token', 'fst_revoked') @{ FS_SERVER = '' }
     Check ($r.Code -ne 0 -and $r.Out -match '401') 'rejected token reported'
     $r = Publish @('-ForgetToken') $noEnv

@@ -256,8 +256,17 @@ if($File){
     if($NotesFile){$Notes=[IO.File]::ReadAllText((Resolve-Path -LiteralPath $NotesFile).Path)}
     elseif(-not $Notes -and $NotesFromGit){
         $range=$NotesFromGit; if($range -notmatch '\.\.'){$range="$range..HEAD"}
-        $log=& git log --no-merges '--pretty=format:- %s' $range
-        if($LASTEXITCODE -ne 0){throw "git log $range failed"}
+        # PowerShell decodes native output with [Console]::OutputEncoding (CP949 on Korean Windows),
+        # while git writes UTF-8: switch to UTF-8 for this call so Korean commit subjects survive.
+        $previousEncoding=[Console]::OutputEncoding
+        try{[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)}catch{}
+        try{
+            $log=& git -c i18n.logOutputEncoding=UTF-8 log --no-merges '--pretty=format:- %s' $range
+            $gitExit=$LASTEXITCODE
+        }finally{
+            try{[Console]::OutputEncoding=$previousEncoding}catch{}
+        }
+        if($gitExit -ne 0){throw "git log $range failed"}
         $Notes=(($log | Out-String).Trim()); if(-not $Notes){$Notes='- 변경 사항 없음'}
     }
     $hash=(Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
