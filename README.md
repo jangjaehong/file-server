@@ -14,31 +14,60 @@
 
 ## 1. 빠른 시작
 
-### Docker (권장)
+### Docker — 내 PC에서 이미지 빌드 → 서버로 이미지 복사 → 로드 (운영 배포 방식)
 
-> 운영 서버 배포는 **PC에서 이미지를 빌드해 서버로 옮기는 방식**을 씁니다:
-> `.\tools\docker\Deploy-Image.ps1 -Server deploy@211.231.121.41` — 자세한 절차는 [docs/배포-운영.md](docs/배포-운영.md) 2절.
-> 아래는 서버에서 소스를 받아 직접 빌드하는 방법입니다.
+서버에는 소스·인터넷이 필요 없습니다. 내 PC: Docker Desktop, Git, OpenSSH(`ssh`/`scp`). 서버: Docker + Compose.
+아래 예시의 서버 SSH 주소는 `deploy@211.231.121.41` 입니다.
+
+**한 번에 (PowerShell, 저장소 루트에서)**
+```powershell
+git pull
+.\tools\docker\Deploy-Image.ps1 -Server deploy@211.231.121.41
+```
+빌드 → `file-server-image.tar` 저장 → 서버로 복사 → `docker load` → `docker compose up -d --no-build` → healthy 확인까지 합니다.
+처음 실행 때 서버에 `.env`가 없으면 만들고 멈추니, 서버에서 `~/file-server/.env`를 고친 뒤 다시 실행하세요.
+
+**수동으로**
+
+1. 내 PC — 이미지 빌드 · 파일로 저장 (PowerShell)
+   ```powershell
+   git pull
+   $tag = Get-Date -Format yyyyMMdd-HHmm
+   docker build --platform linux/amd64 -t file-server:latest -t file-server:$tag .
+   docker save -o file-server-image.tar file-server:latest file-server:$tag   # 반드시 -o (파이프 | 나 > 는 파일이 깨짐)
+   ```
+2. 서버로 복사
+   ```powershell
+   ssh deploy@211.231.121.41 "mkdir -p ~/file-server"
+   scp file-server-image.tar docker-compose.yml .env.example deploy@211.231.121.41:~/file-server/   # 처음
+   scp file-server-image.tar deploy@211.231.121.41:~/file-server/                                   # 업데이트 때
+   ```
+3. 서버 — 로드 · 실행
+   ```bash
+   cd ~/file-server
+   [ -f .env ] || { cp .env.example .env; vi .env; }   # 처음: FS_PORT=9100, FS_ADMIN_PASSWORD, FS_BASE_URL
+   docker image inspect file-server:latest >/dev/null 2>&1 && docker tag file-server:latest file-server:before-update
+   docker load -i file-server-image.tar
+   docker compose up -d --no-build                      # --no-build: 서버에는 소스가 없음
+   docker compose ps                                    # (healthy) 확인
+   rm file-server-image.tar
+   ```
+4. 롤백: `docker tag file-server:before-update file-server:latest && docker compose up -d --no-build`
+
+- 데이터(DB + 업로드 파일)는 볼륨 `file-server_fs-data`에 있어 이미지를 바꿔도 유지됩니다. **`docker compose down -v` 금지.**
+- 관리자 비밀번호: `.env`의 `FS_ADMIN_PASSWORD` 수정 후 `docker compose up -d --no-build` (시작할 때마다 반영)
+- 로그인이 안 되면 `docker compose logs file-server | grep -i admin`
+- `FS_BASE_URL`은 PC들이 접속하는 주소(`http://211.231.121.41:9100`)로 지정하세요.
+- 이미지: `golang:1.27-alpine` 빌드 → `distroless/static` 실행 (약 34MB, 셸 없음, non-root), `HEALTHCHECK` 내장
+- 백업·IIS 전환·문제 해결: [docs/배포-운영.md](docs/배포-운영.md) 2절
+
+### Docker — 서버에서 소스로 직접 빌드 (대안: 서버가 인터넷·GitHub에 접속 가능할 때)
 
 ```bash
-cp .env.example .env          # FS_ADMIN_PASSWORD, FS_BASE_URL 수정
-docker compose up -d --build
-# http://서버:8080          공개 다운로드 페이지
-# http://서버:8080/#/admin  관리자
+git clone https://github.com/jangjaehong/file-server.git && cd file-server
+cp .env.example .env && vi .env
+docker compose up -d --build          # 업데이트: git pull && docker compose up -d --build
 ```
-
-- 이미지: `golang:1.27-alpine` 으로 빌드 → `distroless/static` 위에서 실행 (약 34MB, 셸 없음, non-root uid 65532)
-- 데이터(DB + 업로드 파일)는 볼륨 `fs-data` → 컨테이너 `/data` 에 저장. 이미지를 바꿔도 유지됩니다.
-- `HEALTHCHECK` 내장 (`/healthz`), `restart: unless-stopped`
-- 관리자 비밀번호 변경: `.env` 의 `FS_ADMIN_PASSWORD` 수정 후 `docker compose up -d` (재시작 시 반영)
-- 로그인이 안 되면 `docker compose logs file-server | grep -i admin` 으로 계정 적용 결과를 확인하세요.
-- 백업: `docker run --rm -v file-server_fs-data:/data -v $PWD:/backup alpine tar czf /backup/fs-backup.tgz -C /data .`
-  (SQLite WAL 사용 중이므로 일관된 백업을 원하면 잠깐 `docker compose stop` 후 실행)
-- 업데이트: `git pull && docker compose up -d --build`
-- `FS_BASE_URL` 은 클라이언트가 접속하는 주소(예: `http://192.168.0.10:8080`)로 꼭 지정하세요.
-  업데이트 API 응답의 다운로드 URL 이 이 주소로 만들어집니다.
-- 폐쇄망 서버라면 인터넷 되는 PC에서 `docker build -t file-server:1.0 .` →
-  `docker save file-server:1.0 | gzip > file-server.tar.gz` → 반입 후 `docker load < file-server.tar.gz`
 
 ### 직접 실행
 
