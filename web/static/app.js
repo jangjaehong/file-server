@@ -99,6 +99,7 @@ async function pageProgram(slug) {
       ${downloadButtons(p.slug, L)}
       <details><summary>고정 다운로드 링크 / 자동 업데이트</summary>
       <p>항상 최신 버전: <code>${esc(location.origin)}/download/${esc(p.slug)}/latest/&lt;platform&gt;</code></p>
+      <p>프로그램 설정의 업데이트 서버 주소: <code>${esc(location.origin)}/${esc(p.slug)}/</code></p>
       <p>업데이트 확인: <code>${esc(location.origin)}/api/v1/update?program=${esc(p.slug)}&amp;version=현재버전&amp;platform=windows-amd64</code></p></details></div>`;
   }
   if (p.latest_beta) {
@@ -161,11 +162,15 @@ async function pageAdmin() {
 function suggestNext(rels) {
   const v = rels.find((r) => !/-/.test(r.version))?.version || rels[0]?.version;
   if (!v) return '1.0.0';
-  const m = v.match(/^(\d+)\.(\d+)\.(\d+)/); return m ? `${m[1]}.${m[2]}.${+m[3] + 1}` : '';
+  const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (!m) return '';
+  // 4-part Windows versions (1.0.0.57): bump the build number.
+  return m[4] !== undefined ? `${m[1]}.${m[2]}.${m[3]}.${+m[4] + 1}` : `${m[1]}.${m[2]}.${+m[3] + 1}`;
 }
 
 async function pageAdminProgram(slug) {
-  const [p, rels] = await Promise.all([api('GET', `/api/v1/programs/${enc(slug)}`), api('GET', `/api/v1/admin/programs/${enc(slug)}/releases`)]);
+  const [p, rels, files] = await Promise.all([api('GET', `/api/v1/programs/${enc(slug)}`), api('GET', `/api/v1/admin/programs/${enc(slug)}/releases`), api('GET', `/api/v1/admin/programs/${enc(slug)}/files`)]);
+  const updateURL = `${location.origin}/${slug}/`;
   const base = `/api/v1/admin/programs/${enc(slug)}`;
   const platOpts = (sel) => PLATFORMS.map((x) => `<option${x === sel ? ' selected' : ''}>${x}</option>`).join('');
   $app.innerHTML = adminNav('') + `<div class="row spread"><h1>${esc(p.name)} <span class="muted" style="font-size:15px">${esc(p.slug)}</span></h1>
@@ -177,9 +182,20 @@ async function pageAdminProgram(slug) {
       <div class="err" id="err-prog"></div><div class="row spread"><button class="btn primary">저장</button>
       <button type="button" class="btn danger" data-act="del-prog">프로그램 삭제</button></div></form></details>
 
+    <div class="card"><div class="row spread"><h3>자동 업데이트 주소</h3><code>${esc(updateURL)}</code></div>
+      <p class="muted">프로그램 설정의 "업데이트 서버"에 이 주소를 넣으면 <code>latest.json</code>(최신 stable 숫자 버전의 .exe)을 받아 자동 업데이트합니다.</p>
+      <h3 style="margin-top:12px">고정 파일</h3>
+      <p class="muted">버전과 무관하게 같은 주소에 두는 파일입니다 (예: <code>defaults.json</code> 회사 기본 설정). 같은 이름으로 올리면 교체됩니다.</p>
+      <table><tr><th>파일</th><th class="hide-sm">크기</th><th class="hide-sm">수정</th><th>다운로드</th><th></th></tr>
+      ${files.map((f) => `<tr><td><a href="/${enc(slug)}/${enc(f.name)}">${esc(f.name)}</a></td><td class="hide-sm">${fmtSize(f.size)}</td>
+        <td class="hide-sm">${fmtDate(f.updated_at)}</td><td>${f.downloads}</td>
+        <td><button class="btn small danger" data-act="del-file" data-name="${esc(f.name)}">삭제</button></td></tr>`).join('') || '<tr><td colspan=5 class="muted">없음</td></tr>'}</table>
+      <form id="fixedup" style="margin-top:10px"><div class="row"><input type="file" name="file" multiple required><button class="btn">업로드</button></div>
+        <div class="progress"><div></div></div><div class="err"></div></form></div>
+
     <h2>새 버전 만들기</h2>
     <form class="card" id="newrel">
-      <div class="row"><div style="flex:1"><label>버전 (SemVer: MAJOR.MINOR.PATCH, 예 1.4.0 / 2.0.0-beta.1)</label><input type="text" name="version" value="${esc(suggestNext(rels))}" required></div>
+      <div class="row"><div style="flex:1"><label>버전 (MAJOR.MINOR.PATCH[.BUILD], 예 1.4.0 / 1.0.0.57 / 2.0.0-beta.1 — 베타 표기 버전은 latest.json에 제공되지 않음)</label><input type="text" name="version" value="${esc(suggestNext(rels))}" required></div>
       <div><label>채널</label><select name="channel"><option>stable</option><option>beta</option></select></div></div>
       <label>패치 노트 (Markdown)</label><textarea name="notes" placeholder="### 추가&#10;- 새 기능&#10;### 수정&#10;- 버그 수정"></textarea>
       <label class="inline"><input type="checkbox" name="mandatory"> 필수 업데이트 (이 버전 이전 사용자는 반드시 업데이트)</label>
@@ -223,21 +239,31 @@ async function pageAdminProgram(slug) {
     try { await api('PUT', `${base}/releases/${enc(v)}`, { notes: f.get('notes'), channel: f.get('channel'), mandatory: f.get('mandatory') === 'on' }); route(); }
     catch (err) { form.querySelector('.err').textContent = err.message; }
   }));
+  document.getElementById('fixedup').addEventListener('submit', (e) => {
+    e.preventDefault(); const form = e.target; const fd = new FormData();
+    for (const file of form.file.files) fd.append('file', file);
+    xhrUpload(form, `${base}/files`, fd);
+  });
   $app.querySelectorAll('form.upload').forEach((form) => form.addEventListener('submit', (e) => {
     e.preventDefault(); const v = form.closest('[data-version]').dataset.version;
     const fd = new FormData(); fd.append('platform', form.platform.value);
     for (const file of form.file.files) fd.append('file', file);
+    xhrUpload(form, `${base}/releases/${enc(v)}/assets`, fd);
+  }));
+  $app.dataset.slug = slug;
+}
+
+// Upload with a progress bar (fetch has no upload progress).
+function xhrUpload(form, url, fd) {
     const bar = form.querySelector('.progress > div'); const err = form.querySelector('.err');
     const btn = form.querySelector('button'); btn.disabled = true;
-    const xhr = new XMLHttpRequest(); // XHR for upload progress
-    xhr.open('POST', `${base}/releases/${enc(v)}/assets`);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
     xhr.setRequestHeader('X-Requested-With', 'xhr');
     xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) bar.style.width = (ev.loaded / ev.total * 100) + '%'; };
     xhr.onload = () => { btn.disabled = false; if (xhr.status < 300) route(); else { try { err.textContent = JSON.parse(xhr.responseText).error; } catch { err.textContent = xhr.statusText; } } };
     xhr.onerror = () => { btn.disabled = false; err.textContent = '업로드 실패 (네트워크)'; };
     xhr.send(fd);
-  }));
-  $app.dataset.slug = slug;
 }
 
 async function pageTokens() {
@@ -268,7 +294,7 @@ $app.addEventListener('click', async (e) => {
     publish: `v${v} 를 배포할까요? 배포 후에는 파일을 변경할 수 없습니다.`,
     yank: `v${v} 를 회수할까요? 다운로드·자동 업데이트 대상에서 제외되고, 이 버전 사용자에게 업데이트가 강제됩니다.`,
     unpublish: `v${v} 를 초안으로 되돌릴까요?`, 'del-rel': `초안 v${v} 를 삭제할까요?`,
-    'del-asset': '이 파일을 삭제할까요?', 'del-prog': '프로그램과 모든 버전·파일을 삭제합니다. 계속할까요?', 'del-token': '이 토큰을 폐기할까요?',
+    'del-asset': '이 파일을 삭제할까요?', 'del-prog': '프로그램과 모든 버전·파일을 삭제합니다. 계속할까요?', 'del-token': '이 토큰을 폐기할까요?', 'del-file': `고정 파일 ${b.dataset.name} 을(를) 삭제할까요?`,
   }[act];
   if (confirmMsg && !confirm(confirmMsg)) return;
   try {
@@ -278,6 +304,7 @@ $app.addEventListener('click', async (e) => {
       case 'del-rel': await api('DELETE', rpath); break;
       case 'del-asset': await api('DELETE', `/api/v1/admin/assets/${b.dataset.id}`); break;
       case 'del-token': await api('DELETE', `/api/v1/admin/tokens/${b.dataset.id}`); break;
+      case 'del-file': await api('DELETE', `/api/v1/admin/programs/${enc(slug)}/files/${enc(b.dataset.name)}`); break;
       case 'del-prog': await api('DELETE', `/api/v1/admin/programs/${enc(slug)}`); location.hash = '#/admin'; return;
     }
     route();

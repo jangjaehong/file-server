@@ -153,6 +153,19 @@ CREATE TABLE IF NOT EXISTS assets (
 	created_at   INTEGER NOT NULL,
 	UNIQUE(release_id, platform, filename)
 );
+-- Files that belong to a program but not to a version (e.g. defaults.json).
+-- Uploading the same name again replaces the file.
+CREATE TABLE IF NOT EXISTS program_files (
+	id           INTEGER PRIMARY KEY,
+	program_id   INTEGER NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+	name         TEXT NOT NULL,
+	size         INTEGER NOT NULL,
+	sha256       TEXT NOT NULL,
+	storage_path TEXT NOT NULL,
+	downloads    INTEGER NOT NULL DEFAULT 0,
+	updated_at   INTEGER NOT NULL,
+	UNIQUE(program_id, name)
+);
 CREATE INDEX IF NOT EXISTS idx_releases_program ON releases(program_id);
 CREATE INDEX IF NOT EXISTS idx_assets_release ON assets(release_id);
 `
@@ -648,5 +661,82 @@ func (s *Store) ReleaseStatus(ctx context.Context, releaseID int64, status *stri
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
+	return err
+}
+
+// ---------------------------------------------------------------- program files
+
+// ProgramFile is a file attached to a program rather than a release (e.g. defaults.json).
+type ProgramFile struct {
+	ID          int64     `json:"id"`
+	ProgramID   int64     `json:"program_id"`
+	Name        string    `json:"name"`
+	Size        int64     `json:"size"`
+	SHA256      string    `json:"sha256"`
+	StoragePath string    `json:"-"`
+	Downloads   int64     `json:"downloads"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+const programFileCols = `id, program_id, name, size, sha256, storage_path, downloads, updated_at`
+
+func scanProgramFile(sc interface{ Scan(...any) error }) (*ProgramFile, error) {
+	f := &ProgramFile{}
+	var u int64
+	if err := sc.Scan(&f.ID, &f.ProgramID, &f.Name, &f.Size, &f.SHA256, &f.StoragePath, &f.Downloads, &u); err != nil {
+		return nil, err
+	}
+	f.UpdatedAt = unix(u)
+	return f, nil
+}
+
+// ListProgramFiles returns the fixed files of a program.
+func (s *Store) ListProgramFiles(ctx context.Context, programID int64) ([]ProgramFile, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+programFileCols+` FROM program_files WHERE program_id=? ORDER BY name`, programID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ProgramFile{}
+	for rows.Next() {
+		f, err := scanProgramFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
+
+// GetProgramFile returns a fixed file by name.
+func (s *Store) GetProgramFile(ctx context.Context, programID int64, name string) (*ProgramFile, error) {
+	f, err := scanProgramFile(s.db.QueryRowContext(ctx, `SELECT `+programFileCols+` FROM program_files WHERE program_id=? AND name=?`, programID, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return f, err
+}
+
+// PutProgramFile inserts or replaces a fixed file.
+func (s *Store) PutProgramFile(ctx context.Context, f *ProgramFile) error {
+	ts := now()
+	err := s.db.QueryRowContext(ctx, `INSERT INTO program_files(program_id, name, size, sha256, storage_path, updated_at)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(program_id, name) DO UPDATE SET size=excluded.size, sha256=excluded.sha256,
+			storage_path=excluded.storage_path, updated_at=excluded.updated_at
+		RETURNING id, downloads`, f.ProgramID, f.Name, f.Size, f.SHA256, f.StoragePath, ts).Scan(&f.ID, &f.Downloads)
+	f.UpdatedAt = unix(ts)
+	return err
+}
+
+// DeleteProgramFile deletes a fixed file row.
+func (s *Store) DeleteProgramFile(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM program_files WHERE id=?`, id)
+	return affected(res, err)
+}
+
+// CountProgramFileDownload increments the download counter of a fixed file.
+func (s *Store) CountProgramFileDownload(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE program_files SET downloads=downloads+1 WHERE id=?`, id)
 	return err
 }

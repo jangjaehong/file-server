@@ -7,6 +7,8 @@
 - 인터넷이 없는 폐쇄망(SCADA/공장망 등)에서도 외부 CDN 없이 동작
 - 프로그램별 설명, 버전별 패치노트(Markdown), 플랫폼별 파일, SHA-256 체크섬, 다운로드 수
 - 자동 업데이트 API + Go 클라이언트 라이브러리(`pkg/updater`) + CLI(`fsctl`)
+- 기존 IIS 방식(`/<프로그램>/latest.json`)도 그대로 제공 → **One TaskBar, ICS-SCM은 클라이언트 수정 없이 연동**
+  ([docs/windows-programs.md](docs/windows-programs.md))
 
 ---
 
@@ -86,6 +88,7 @@ Program  scada-viewer            ← 고정 ID(slug), 이름, 설명 (한 번 �
 
 ### ② 버전 번호는 SemVer(`MAJOR.MINOR.PATCH`)로 강제한다
 - `1.4.2` → 버그 수정은 PATCH, 기능 추가는 MINOR, 호환성이 깨지면 MAJOR
+- Windows 파일 버전 형식 `1.0.0.57`(끝자리 = CI 빌드 번호)도 지원합니다. `1.0.0.9 < 1.0.0.10` 으로 숫자 비교합니다.
 - 베타/시험판은 `2.0.0-beta.1`, `2.0.0-rc.1` 처럼 pre-release 표기
 - "최신 버전"은 **업로드 시각이 아니라 버전 번호**로 계산합니다 (`1.10.0 > 1.9.0` 을 올바르게 비교).
   그래서 1.x 유지보수 패치를 2.x 이후에 올려도 최신이 뒤바뀌지 않습니다.
@@ -234,7 +237,11 @@ fsctl download -server http://files.local:8080 -program scada-viewer -o .   # la
 | POST | `…/releases/{version}/assets` | multipart: `platform`, `file`(여러 개) |
 | POST | `…/releases/{version}/publish` \| `yank` \| `unpublish` | 상태 변경 |
 | DELETE | `/api/v1/admin/assets/{id}` | 초안의 파일 삭제 |
+| GET/POST | `/api/v1/admin/programs/{slug}/files` | 고정 파일(defaults.json 등) 목록/업로드(같은 이름은 교체) |
+| DELETE | `/api/v1/admin/programs/{slug}/files/{name}` | 고정 파일 삭제 |
 | GET/POST/DELETE | `/api/v1/admin/tokens[/{id}]` | API 토큰 |
+
+정적 업데이트 주소(기존 IIS 호환): `GET /{slug}/latest.json`, `GET /{slug}/{파일}` — [docs/windows-programs.md](docs/windows-programs.md)
 
 공개 API: `GET /api/v1/programs`, `/api/v1/programs/{slug}`, `/api/v1/programs/{slug}/releases[/{version}]`, `/api/v1/update`
 
@@ -247,6 +254,8 @@ internal/server HTTP 핸들러, 인증, 업로드/다운로드, 업데이트 API
 internal/store  SQLite 저장소 (programs / releases / assets / admins / sessions / api_tokens)
 internal/semver Semantic Versioning 파싱·비교
 pkg/updater     프로그램에 내장하는 자동 업데이트 클라이언트 라이브러리
+tools/Publish-FileServer.ps1  Windows 빌드 PC용 배포 스크립트 (기존 Publish-Internal.ps1 대체)
+docs/windows-programs.md      One TaskBar · ICS-SCM 연동/전환 가이드
 web/static      내장 웹 UI (Vanilla JS, 외부 의존성 없음)
 Dockerfile, docker-compose.yml, .env.example   Docker 배포
 ```

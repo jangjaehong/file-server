@@ -3,6 +3,10 @@
 //
 // Accepted forms: "1.2.3", "v1.2.3", "1.2.3-beta.1", "1.2.3+build.5".
 // Build metadata is kept but ignored when comparing.
+//
+// For Windows programs the .NET / file-version style is accepted as well:
+// "1.2" (= 1.2.0) and "1.0.0.57" (a fourth "revision" number, typically the CI
+// build number). The revision is compared after PATCH and before pre-release.
 package semver
 
 import (
@@ -14,6 +18,8 @@ import (
 // Version is a parsed semantic version.
 type Version struct {
 	Major, Minor, Patch uint64
+	Rev                 uint64   // optional 4th number (1.0.0.57)
+	HasRev              bool     // true if the 4th number was given
 	Pre                 []string // pre-release identifiers, e.g. ["beta", "1"]
 	Build               string
 }
@@ -47,10 +53,10 @@ func Parse(s string) (Version, error) {
 		}
 	}
 	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
-		return v, fmt.Errorf("version %q must have the form MAJOR.MINOR.PATCH", orig)
+	if len(parts) < 2 || len(parts) > 4 {
+		return v, fmt.Errorf("version %q must have the form MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD", orig)
 	}
-	nums := make([]uint64, 3)
+	nums := make([]uint64, 4)
 	for i, p := range parts {
 		if p == "" || !isNum(p) || (len(p) > 1 && p[0] == '0') {
 			return v, fmt.Errorf("invalid number %q in version %q", p, orig)
@@ -61,7 +67,8 @@ func Parse(s string) (Version, error) {
 		}
 		nums[i] = n
 	}
-	v.Major, v.Minor, v.Patch = nums[0], nums[1], nums[2]
+	v.Major, v.Minor, v.Patch, v.Rev = nums[0], nums[1], nums[2], nums[3]
+	v.HasRev = len(parts) == 4
 	return v, nil
 }
 
@@ -77,6 +84,9 @@ func MustParse(s string) Version {
 // String returns the canonical form without a leading "v".
 func (v Version) String() string {
 	s := fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+	if v.HasRev {
+		s += fmt.Sprintf(".%d", v.Rev)
+	}
 	if len(v.Pre) > 0 {
 		s += "-" + strings.Join(v.Pre, ".")
 	}
@@ -85,6 +95,10 @@ func (v Version) String() string {
 	}
 	return s
 }
+
+// IsNumeric reports whether v is a plain dotted number without pre-release
+// part, i.e. something .NET's System.Version can parse ("1.0.0.57").
+func (v Version) IsNumeric() bool { return len(v.Pre) == 0 && v.Build == "" }
 
 // IsPrerelease reports whether v has pre-release identifiers.
 func (v Version) IsPrerelease() bool { return len(v.Pre) > 0 }
@@ -98,6 +112,9 @@ func Compare(a, b Version) int {
 		return c
 	}
 	if c := cmpU(a.Patch, b.Patch); c != 0 {
+		return c
+	}
+	if c := cmpU(a.Rev, b.Rev); c != 0 {
 		return c
 	}
 	// A version without pre-release has higher precedence.

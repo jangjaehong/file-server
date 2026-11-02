@@ -153,6 +153,17 @@ func (s *Server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "channel must be stable or beta")
 		return
 	}
+	existing, err := s.st.ListReleases(r.Context(), p.ID, true)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	for _, e := range existing {
+		if ev, err := semver.Parse(e.Version); err == nil && semver.Compare(ev, v) == 0 {
+			writeErr(w, http.StatusConflict, "version "+e.Version+" already exists; versions are immutable, use a new version number")
+			return
+		}
+	}
 	rel := &store.Release{ProgramID: p.ID, Version: canonical(v), Channel: ch, Notes: in.Notes, Mandatory: in.Mandatory}
 	if err := s.st.CreateRelease(r.Context(), rel); err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -340,25 +351,12 @@ func (s *Server) saveAsset(ctx context.Context, p *store.Program, rel *store.Rel
 	if !ok {
 		return nil, http.StatusBadRequest, errors.New("invalid file name")
 	}
-	tmp, err := os.CreateTemp(filepath.Join(s.cfg.DataDir, "tmp"), "upload-*")
+	up, code, err := s.receiveFile(part)
 	if err != nil {
-		return nil, http.StatusInternalServerError, err
+		return nil, code, err
 	}
-	defer os.Remove(tmp.Name()) // no-op after successful rename
-	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(part, s.cfg.MaxUploadSize+1))
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return nil, http.StatusBadRequest, errors.New("upload interrupted: " + err.Error())
-	}
-	if n > s.cfg.MaxUploadSize {
-		return nil, http.StatusRequestEntityTooLarge, errors.New("file too large")
-	}
-	if n == 0 {
-		return nil, http.StatusBadRequest, errors.New("empty file")
-	}
+	defer os.Remove(up.tmp) // no-op after successful rename
+	n := up.size
 	relPath := path.Join(p.Slug, rel.Version, platform, name)
 	dst := filepath.Join(s.cfg.DataDir, "files", filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -368,18 +366,51 @@ func (s *Server) saveAsset(ctx context.Context, p *store.Program, rel *store.Rel
 		return nil, http.StatusConflict, errors.New(platform + "/" + name + " already uploaded for this version; delete it first")
 	}
 	a := &store.Asset{ReleaseID: rel.ID, Platform: platform, Filename: name, Size: n,
-		SHA256: hex.EncodeToString(h.Sum(nil)), StoragePath: relPath}
+		SHA256: up.sha256, StoragePath: relPath}
 	if err := s.st.AddAsset(ctx, a); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			return nil, http.StatusConflict, errors.New(platform + "/" + name + " already uploaded for this version")
 		}
 		return nil, http.StatusInternalServerError, err
 	}
-	if err := os.Rename(tmp.Name(), dst); err != nil {
+	if err := os.Rename(up.tmp, dst); err != nil {
 		_ = s.st.DeleteAsset(ctx, a.ID)
 		return nil, http.StatusInternalServerError, err
 	}
 	return a, 0, nil
+}
+
+type received struct {
+	tmp    string
+	size   int64
+	sha256 string
+}
+
+// receiveFile streams an uploaded part into data/tmp while hashing it.
+// The caller must remove (or rename) r.tmp.
+func (s *Server) receiveFile(part io.Reader) (*received, int, error) {
+	tmp, err := os.CreateTemp(filepath.Join(s.cfg.DataDir, "tmp"), "upload-*")
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(part, s.cfg.MaxUploadSize+1))
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	fail := func(code int, e error) (*received, int, error) {
+		os.Remove(tmp.Name())
+		return nil, code, e
+	}
+	switch {
+	case err != nil:
+		return fail(http.StatusBadRequest, errors.New("upload interrupted: "+err.Error()))
+	case n > s.cfg.MaxUploadSize:
+		return fail(http.StatusRequestEntityTooLarge, errors.New("file too large"))
+	case n == 0:
+		return fail(http.StatusBadRequest, errors.New("empty file"))
+	}
+	return &received{tmp: tmp.Name(), size: n, sha256: hex.EncodeToString(h.Sum(nil))}, 0, nil
 }
 
 func (s *Server) handleDeleteAsset(w http.ResponseWriter, r *http.Request) {

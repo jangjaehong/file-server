@@ -90,9 +90,16 @@ func (s *Server) Handler() http.Handler {
 	admin("POST /api/v1/admin/programs/{slug}/releases/{version}/unpublish", s.handleSetStatus(store.StatusDraft))
 	admin("POST /api/v1/admin/programs/{slug}/releases/{version}/assets", s.handleUploadAsset)
 	admin("DELETE /api/v1/admin/assets/{id}", s.handleDeleteAsset)
+	admin("GET /api/v1/admin/programs/{slug}/files", s.handleListProgramFiles)
+	admin("POST /api/v1/admin/programs/{slug}/files", s.handleUploadProgramFiles)
+	admin("DELETE /api/v1/admin/programs/{slug}/files/{name}", s.handleDeleteProgramFile)
 	admin("GET /api/v1/admin/tokens", s.handleListTokens)
 	admin("POST /api/v1/admin/tokens", s.handleCreateToken)
 	admin("DELETE /api/v1/admin/tokens/{id}", s.handleDeleteToken)
+
+	// ---- static update layout used by existing Windows clients (see compat.go):
+	//      /{program}/latest.json, /{program}/<exe>, /{program}/defaults.json
+	mux.HandleFunc("GET /{slug}/{name}", s.handleStatic)
 
 	// ---- web UI (single page app with hash routing)
 	mux.Handle("GET /", http.FileServerFS(s.static))
