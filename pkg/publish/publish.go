@@ -29,23 +29,26 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/jangjaehong/file-server/internal/semver"
 )
 
 // Options describes one publish.
 type Options struct {
-	Server    string // base URL, e.g. http://211.231.121.41:9100
-	Token     string // API token (Bearer)
-	Program   string // slug, e.g. onetaskbar
-	Name      string // display name used when the program is created (default: slug)
-	Version   string // e.g. 1.0.0.57
-	Channel   string // stable (default) or beta
-	Notes     string
-	Mandatory bool
-	Draft     bool              // upload only, do not publish
-	Files     map[string]string // platform -> local path
-	Fixed     []string          // unversioned files (defaults.json), replaced on every upload
-	HTTP      *http.Client
-	Log       func(format string, args ...any)
+	Server     string // base URL, e.g. http://211.231.121.41:9100
+	Token      string // API token (Bearer)
+	Program    string // slug, e.g. onetaskbar
+	Name       string // display name used when the program is created (default: slug)
+	Version    string // e.g. 1.0.0.57
+	Channel    string // stable (default) or beta
+	Notes      string
+	Mandatory  bool
+	Draft      bool              // upload only, do not publish
+	AllowOlder bool              // allow a version lower than the newest published one
+	Files      map[string]string // platform -> local path
+	Fixed      []string          // unversioned files (defaults.json), replaced on every upload
+	HTTP       *http.Client
+	Log        func(format string, args ...any)
 }
 
 // Result reports what happened.
@@ -56,6 +59,9 @@ type Result struct {
 	Published        bool
 	LatestJSON       string // <server>/<program>/latest.json
 }
+
+// ErrOlder is returned when the version is lower than the newest published one.
+var ErrOlder = errors.New("version is older than the newest published version")
 
 // ErrImmutable is returned when a published version would get a different file.
 var ErrImmutable = errors.New("version already published with a different file")
@@ -179,6 +185,24 @@ func publishVersion(ctx context.Context, c *client, slug string, o Options, res 
 		hashes[platform] = h
 	}
 	rpath := "/api/v1/admin/programs/" + slug + "/releases/" + url.PathEscape(o.Version)
+
+	// newest published version on the server: refuse to go backwards unless asked
+	if !o.AllowOlder {
+		var all []release
+		if _, err := c.do(ctx, "GET", "/api/v1/admin/programs/"+slug+"/releases", nil, "", &all); err != nil {
+			return err
+		}
+		if mine, err := semver.Parse(o.Version); err == nil {
+			for _, r := range all {
+				if r.Status != "published" {
+					continue
+				}
+				if v, err := semver.Parse(r.Version); err == nil && semver.Less(mine, v) {
+					return fmt.Errorf("%w: %s < %s (use AllowOlder for a maintenance build)", ErrOlder, o.Version, r.Version)
+				}
+			}
+		}
+	}
 
 	// 2. existing version?
 	var rel release

@@ -201,6 +201,7 @@ func cmdPublish(ctx context.Context, args []string) error {
 	notesGit := fs.String("notes-from-git", "", "generate notes from commit subjects: <ref> (= <ref>..HEAD) or <a>..<b>")
 	mandatory := fs.Bool("mandatory", false, "clients must install this update")
 	draft := fs.Bool("draft", false, "upload only, do not publish")
+	allowOlder := fs.Bool("allow-older", false, "allow a version lower than the newest published one")
 	skip := fs.Bool("skip-if-unconfigured", false, "exit 0 without doing anything when server or token is empty (CI without secrets)")
 	var files, fixed multiFlag
 	fs.Var(&files, "file", "platform=path, repeatable (e.g. -file windows-amd64=dist/app.exe)")
@@ -213,7 +214,7 @@ func cmdPublish(ctx context.Context, args []string) error {
 	}
 	o := publish.Options{
 		Server: *server, Token: *token, Program: *program, Name: *name, Version: *version,
-		Channel: *channel, Notes: *notes, Mandatory: *mandatory, Draft: *draft,
+		Channel: *channel, Notes: *notes, Mandatory: *mandatory, Draft: *draft, AllowOlder: *allowOlder,
 		Files: map[string]string{}, Fixed: fixed,
 		Log: func(f string, a ...any) { fmt.Printf(f+"\n", a...) },
 	}

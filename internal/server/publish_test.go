@@ -90,6 +90,20 @@ func TestPublishAutoCreateAndIdempotent(t *testing.T) {
 		t.Fatalf("served %q", raw)
 	}
 
+	// Going backwards is refused unless explicitly allowed.
+	old := opts()
+	old.Version = "1.0.0.30"
+	if _, err := publish.Run(ctx, old); !errors.Is(err, publish.ErrOlder) {
+		t.Fatalf("expected ErrOlder, got %v", err)
+	}
+	old.AllowOlder = true
+	if _, err := publish.Run(ctx, old); err != nil {
+		t.Fatalf("AllowOlder: %v", err)
+	}
+	if _, raw := get(t, e.ts.URL+"/ics-scm/latest.json"); !strings.Contains(string(raw), `"1.0.0.59"`) {
+		t.Fatalf("older maintenance build must not become latest: %s", raw)
+	}
+
 	// Fixed file only (defaults.json), program already exists.
 	def := filepath.Join(dir, "defaults.json")
 	os.WriteFile(def, []byte(`{"x":1}`), 0o644)

@@ -7,3 +7,4 @@ bin
 Dockerfile
 docker-compose.yml
 .env
+file-server-image.tar

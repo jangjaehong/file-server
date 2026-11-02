@@ -8,13 +8,17 @@
 - 프로그램별 설명, 버전별 패치노트(Markdown), 플랫폼별 파일, SHA-256 체크섬, 다운로드 수
 - 자동 업데이트 API + Go 클라이언트 라이브러리(`pkg/updater`) + CLI(`fsctl`)
 - 기존 IIS 방식(`/<프로그램>/latest.json`)도 그대로 제공 → **One TaskBar, ICS-SCM은 클라이언트 수정 없이 연동**
-  ([docs/windows-programs.md](docs/windows-programs.md))
+  ([docs/배포-운영.md](docs/배포-운영.md))
 
 ---
 
 ## 1. 빠른 시작
 
 ### Docker (권장)
+
+> 운영 서버 배포는 **PC에서 이미지를 빌드해 서버로 옮기는 방식**을 씁니다:
+> `.\tools\docker\Deploy-Image.ps1 -Server deploy@211.231.121.41` — 자세한 절차는 [docs/배포-운영.md](docs/배포-운영.md) 2절.
+> 아래는 서버에서 소스를 받아 직접 빌드하는 방법입니다.
 
 ```bash
 cp .env.example .env          # FS_ADMIN_PASSWORD, FS_BASE_URL 수정
@@ -144,7 +148,7 @@ data/files/scada-viewer/1.1.0/windows-amd64/ScadaViewer.exe   ← 실제 저장 
    ```
    - 프로그램이 없으면 자동 생성되고, 같은 버전·같은 파일로 다시 실행하면 "이미 배포됨"으로 성공합니다(CI 재실행 안전).
    - `-notes-from-git v1.3.0` 으로 커밋 제목에서 패치노트를 만들 수 있습니다.
-   - GitHub Actions 연동: [docs/windows-programs.md](docs/windows-programs.md) 5절
+   - 사내 PC에서 직접 빌드·전송하는 절차와 스크립트 레퍼런스: [docs/배포-운영.md](docs/배포-운영.md)
    소스의 git 태그(`v1.4.0`)와 버전을 일치시키고, 빌드 시 `-ldflags "-X main.Version=1.4.0"` 로
    프로그램 안에 버전을 박아 두면 업데이트 확인에 그대로 사용할 수 있습니다.
 
@@ -244,7 +248,7 @@ fsctl download -server http://files.local:8080 -program scada-viewer -o .   # la
 | DELETE | `/api/v1/admin/programs/{slug}/files/{name}` | 고정 파일 삭제 |
 | GET/POST/DELETE | `/api/v1/admin/tokens[/{id}]` | API 토큰 |
 
-정적 업데이트 주소(기존 IIS 호환): `GET /{slug}/latest.json`, `GET /{slug}/{파일}` — [docs/windows-programs.md](docs/windows-programs.md)
+정적 업데이트 주소(기존 IIS 호환): `GET /{slug}/latest.json`, `GET /{slug}/{파일}` — [docs/배포-운영.md](docs/배포-운영.md)
 
 공개 API: `GET /api/v1/programs`, `/api/v1/programs/{slug}`, `/api/v1/programs/{slug}/releases[/{version}]`, `/api/v1/update`
 
@@ -259,7 +263,8 @@ internal/semver Semantic Versioning 파싱·비교
 pkg/updater     프로그램에 내장하는 자동 업데이트 클라이언트 라이브러리
 pkg/publish     배포 로직 (fsctl publish; Publish-FileServer.ps1과 동일한 규칙)
 tools/Publish-FileServer.ps1  Windows 빌드 PC용 배포 스크립트 (기존 Publish-Internal.ps1 대체)
-docs/windows-programs.md      One TaskBar · ICS-SCM 연동/전환 가이드
+tools/docker/Deploy-Image.ps1 PC에서 이미지 빌드 → 서버로 복사 → 로드·재시작
+docs/배포-운영.md             서버 운영자용 배포·운영 가이드 (One TaskBar · ICS-SCM)
 web/static      내장 웹 UI (Vanilla JS, 외부 의존성 없음)
 Dockerfile, docker-compose.yml, .env.example   Docker 배포
 ```

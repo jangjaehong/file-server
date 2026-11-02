@@ -108,6 +108,31 @@ try {
     Check ($r.Code -eq 0 -and $otb.version -eq '2.0.0.1' -and $otb.file -eq 'OneTaskBar-Setup-2.0.0.1.exe' -and $otb.mandatory) 'onetaskbar published with -Version/-Mandatory'
     $r = Publish @('-Program', 'onetaskbar', '-File', $setup, '-Version', '2.0.0.2') @{ FS_TOKEN = 'fst_wrong' }
     Check ($r.Code -ne 0 -and $r.Out -match '401') 'wrong token -> error'
+
+    # 9. Older than the newest published version: refused unless -AllowOlder.
+    $r = Publish @('-Program', 'ics-scm', '-File', $exe, '-Version', '1.0.0.3')
+    Check ($r.Code -ne 0 -and $r.Out -match 'older than 1\.0\.0\.6') 'older version refused'
+    $r = Publish @('-Program', 'ics-scm', '-File', $exe, '-Version', '1.0.0.3', '-AllowOlder')
+    Check ($r.Code -eq 0 -and (Get-Json '/ics-scm/latest.json').version -eq '1.0.0.6') '-AllowOlder publishes a maintenance build without changing latest'
+    Check ($r.Out -match 'Server: ics-scm stable 1\.0\.0\.6' -and $r.Out -match '"version":"1\.0\.0\.6"') 'server version and latest.json shown'
+
+    # 10. Token store: save once, then publish with neither FS_SERVER nor FS_TOKEN set.
+    $storePath = if ($IsWindows) { Join-Path $env:APPDATA 'FileServer\credentials.json' } else { Join-Path $HOME '.config/fileserver/credentials.json' }
+    $noEnv = @{ FS_SERVER = ''; FS_TOKEN = '' }
+    $r = Publish @('-Server', $base, '-Token', $token, '-SaveToken') $noEnv
+    Check ($r.Code -eq 0 -and $r.Out -match 'Token saved' -and (Test-Path -LiteralPath $storePath)) 'token saved to the store'
+    $stored = Get-Content -LiteralPath $storePath -Raw
+    if ($IsWindows) { Check (-not $stored.Contains($token) -and $stored -match '"dpapi"') 'stored token is DPAPI-encrypted' }
+    else { Check (((& stat -c '%a' $storePath) -join '') -eq '600') 'store file mode is 600' }
+    Set-Content -LiteralPath $versionTxt -Value '1.0.0.7'
+    $r = Publish @('-Program', 'ics-scm', '-File', $exe) $noEnv
+    Check ($r.Code -eq 0 -and $r.Out -match 'Published ics-scm 1\.0\.0\.7') 'saved server + token used when nothing is configured'
+    $r = Publish @('-Program', 'ics-scm', '-File', $exe, '-Token', 'fst_revoked') @{ FS_SERVER = '' }
+    Check ($r.Code -ne 0 -and $r.Out -match '401') 'rejected token reported'
+    $r = Publish @('-ForgetToken') $noEnv
+    Check ($r.Code -eq 0 -and $r.Out -match 'Forgot') 'token forgotten'
+    $r = Publish @('-Program', 'ics-scm', '-File', $exe, '-SkipIfUnconfigured') $noEnv
+    Check ($r.Code -eq 0 -and $r.Out -match 'skipping') 'no token after -ForgetToken -> skipped'
 }
 finally {
     if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
