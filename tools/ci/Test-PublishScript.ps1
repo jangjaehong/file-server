@@ -117,3 +117,5 @@ finally {
 }
 if ($failures -gt 0) { Write-Error "$failures check(s) failed"; exit 1 }
 Write-Host 'All publish script checks passed.' -ForegroundColor Green
+# The last scenario intentionally ends a child with exit 1; do not let $LASTEXITCODE leak.
+exit 0
